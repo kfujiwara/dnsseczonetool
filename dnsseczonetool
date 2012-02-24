@@ -1,5 +1,60 @@
 #!/bin/sh
 
+# dnsseczonetool : Simple DNSSEC key management and zone signing tool
+#
+# $Id: dnsseczonetool.20100303,v 1.1 2010/05/10 11:15:30 fujiwara Exp $
+#
+# http://member.wide.ad.jp/~fujiwara/dnssec/dnsseczonetool
+#
+# Installation and Configuration:
+#   1. Copy dnsseczonetool into some directory.
+#   2. Create dnsseczonetool.conf into the same directory of dnsseczonetool.
+#
+#   dnsseczonetool.conf:
+#     MASTERDIR: Zone file directory
+#                Default: MASTERDIR="/etc/namedb/master"
+#     KSK_PARAM: Default dnssec-keygen's options for KSK
+#                Default: KSK_PARAM_DEFAULT="-n zone -a RSASHA1 -b 2048 -f ksk"
+#     KSK_PARAM_$zone: dnssec-keygen's options for zone's KSK
+#                Default: KSK_PARAM
+#     ZSK_PARAM: Default dnssec-keygen's options for ZSK
+#                Default: ZSK_PARAM_DEFAULT="-n zone -a RSASHA1 -b 1024"
+#     ZSK_PARAM_$zone: dnssec-keygen's options for zone's ZSK
+#                Default: ZSK_PARAM
+#     SIGN_PARAM: Default dnssec-signzone options
+#                Default: SIGN_PARAM_DEFAULT="-N unixtime"
+#     SIGN_PARAM_$zone: dnssec-signzone options for zone
+#                Default: SIGN_PARAM
+#     keygen:    dnssec-keygen path
+#                Default: keygen="/usr/local/sbin/dnssec-keygen"
+#     signzone:  dnssec-signzone path
+#                Default: signzone="/usr/local/sbin/dnssec-signzone"
+#     dsfromkey: dnssec-dsfromkey path
+#                Default: dsfromkey="/usr/local/sbin/dnssec-dsfromkey"
+#     rndc:      rndc path
+#                Default: rndc="/usr/local/sbin/rndc"
+#     CONFIGDIR: directory where dnsseczonetool uses.
+#                Default: CONFIGDIR="$MASTERDIR/config"
+#     KEYDIR:    directory where dnsseczonetool puts zone keys.
+#                Default: KEYDIR="$MASTERDIR/config/keydir"
+#     KEYBACKUPDIR: directory where dnsseczonetool puts old keys.
+#                Default: KEYBACKUPDIR="$MASTERDIR/config/backup"
+#     RNDC_OPTION: rndc options or OFF
+#                Default: RNDC_OPTION="-k $MASTERDIR/rndc.key"
+#
+#     caution:   $zone is zone name which '.' characters are replaced by '_'.
+#
+# Usage:
+#        
+#        1. Generate KSK and ZSK
+#                dnsseczonetool keygen2 zone(s)
+#        2. Sign zone using keys generated in step 1
+#                dnsseczonetool sign zone(s)
+#        3. ZSK rollover
+#                dnsseczonetool zskroll zone(s)
+#        4. Zone key status
+#                dnsseczonetool status zone(s)
+
 # Copyright (c) 2009 Kazunori Fujiwara <fujiwara@wide.ad.jp>.
 # All rights reserved.
 #
@@ -27,13 +82,14 @@
 PROG=$0
 
 DIR=`dirname $0`
-CONFIGFILE="$DIR/dnssec.conf"
+CONFIGFILE="$DIR/dnsseczonetool.conf"
 
 keygen="/usr/local/sbin/dnssec-keygen"
 signzone="/usr/local/sbin/dnssec-signzone"
 dsfromkey="/usr/local/sbin/dnssec-dsfromkey"
 rndc="/usr/local/sbin/rndc"
 MASTERDIR="/etc/namedb/master"
+RNDC_OPTION="-k $MASTERDIR/rndc.key"
 
 KSK_PARAM="-n zone -a RSASHA1 -b 2048 -f ksk"
 ZSK_PARAM="-n zone -a RSASHA1 -b 1024"
@@ -43,6 +99,11 @@ if [ -f $CONFIGFILE ]; then
 	. $CONFIGFILE
 fi
 
+if [ "$1" = "" -a "$DEFAULT_ACTION" != "" ]; then
+	echo "Doing $DEFAULT_ACTION"
+	set $DEFAULT_ACTION
+	echo $1 $2 $3
+fi
 CMD="$1"
 shift
 
@@ -102,20 +163,26 @@ _usage()
 	if [ "$LOCKF" != "" ]; then
 		rm $LOCKF
 	fi
-	echo "Usage: "
-	echo "   $PROG sign zone(s)                 : (Re-)Sign the zone(s)"
-	echo "   $PROG keygen zone(s)               : Generate KSK and ZSK for the zone(s)"
-	echo "   $PROG keygen2 zone(s)              : Generate KSK and ZSK and standby sets for the zone(s)"
-	echo "   $PROG status zone(s)               : Show key status for the zone(s)"
-	echo "   $PROG standby-zsk-keygen zone(s)   : Generate standby ZSK key for the zone(s)"
-	echo "   $PROG standby-ksk-keygen zone(s)   : Generate standby KSK key for the zone(s)"
-	echo "   $PROG zskroll zone(s)              : Roll ZSK for the zone(s)"
+	cat <<EOF
+$PROG: Simple DNSSEC key management and zone signing tool
+Usage:  $PROG command zone(s)
+  Available commands:
+     keygen  : Generate KSK and ZSK for the zone(s)
+     keygen2 : Generate KSK and ZSK and standby sets for the zone(s)
+     sign    : (Re-)Sign the zone(s)
+     zskroll : Roll ZSK for the zone(s)
+     status  : Show key status for the zone(s)
+     standby-zsk-keygen :
+               Generate standby ZSK key for the zone(s)
+     standby-ksk-keygen :
+               Generate standby KSK key for the zone(s)
+EOF
 	exit 1
 }
 
 sign()
 {
-	_check_file $ZONE $KSK_FILE $ZSK_FILE
+	_check_file $ZONEFILE $KSK_FILE $ZSK_FILE
 	KSK=`head -1 $KSK_FILE`
 	ZSK=`head -1 $ZSK_FILE`
 	> $INCFILE
@@ -133,12 +200,14 @@ sign()
 			cat "$KEYDIR/$keyfile.key" >> $INCFILE
 		fi
 	done
-	echo $signzone $SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private -f "$ZONE.signed" $ZONE $KEYDIR/$ZSK.private
-	$signzone $SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private -f "$ZONE.signed" $ZONE $KEYDIR/$ZSK.private 2>&1
+	echo $signzone $_SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private -f "$ZONEFILE.signed" $ZONEFILE $KEYDIR/$ZSK.private
+	$signzone $_SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private -f "$ZONEFILE.signed" $ZONEFILE $KEYDIR/$ZSK.private 2>&1
 
 	echo "signzone returns $?"
 
-	$rndc -k "$MASTERDIR/rndc.key" reload $ZONE
+	if [ "$RNDC_OPTION" != "OFF" ]; then
+		$rndc $RNDC_OPTION reload $ZONE
+	fi
 }
 
 status()
@@ -167,6 +236,10 @@ if [ "$CMD" = "" ]; then
 	_usage
 fi
 
+if [ "$1" = "" -a "$ZONELIST" != "" ]; then
+	set $ZONELIST
+fi
+
 for ZONE in $*
 do
 	LOCKF="$CONFIGDIR/$ZONE.lock"
@@ -176,7 +249,17 @@ do
 	ZSK_FILE="$CONFIGDIR/$HEAD_ZSKNAME$ZONE"
 	KSK_S_FILE="$CONFIGDIR/$HEAD_KSSNAME$ZONE"
 	ZSK_S_FILE="$CONFIGDIR/$HEAD_ZSSNAME$ZONE"
-	INCFILE="$MASTERDIR/$ZONE.keys"
+	if [ $ZONE = "." ]; then
+		ZONEFILE="root"
+	else
+		ZONEFILE=$ZONE
+	fi
+	INCFILE="$MASTERDIR/$ZONEFILE.keys"
+
+	ZONE_=`echo $ZONE | tr . _`
+	eval _SIGN_PARAM=\${SIGN_PARAM_$ZONE_:-$SIGN_PARAM}
+	eval _KSK_PARAM=\${KSK_PARAM_$ZONE_:-$KSK_PARAM}
+	eval _ZSK_PARAM=\${ZSK_PARAM_$ZONE_:-$ZSK_PARAM}
 
 	touch $TMPF
 	if ln $TMPF $LOCKF; then
@@ -190,26 +273,26 @@ do
 	case $CMD in
 	keygen)
 		_check_nofile $KSK_FILE $ZSK_FILE
-		(cd $KEYDIR; $keygen $KSK_PARAM $ZONE) > $KSK_FILE
-		(cd $KEYDIR; $keygen $ZSK_PARAM $ZONE) > $ZSK_FILE
+		(cd $KEYDIR; $keygen $_KSK_PARAM $ZONE) > $KSK_FILE
+		(cd $KEYDIR; $keygen $_ZSK_PARAM $ZONE) > $ZSK_FILE
 		status
 		;;
 	keygen2)
 		_check_nofile $KSK_FILE $ZSK_FILE $KSK_S_FILE $ZSK_S_FILE
-		(cd $KEYDIR; $keygen $KSK_PARAM $ZONE) > $KSK_FILE
-		(cd $KEYDIR; $keygen $ZSK_PARAM $ZONE) > $ZSK_FILE
-		(cd $KEYDIR; $keygen $KSK_PARAM $ZONE) > $KSK_S_FILE
-		(cd $KEYDIR; $keygen $ZSK_PARAM $ZONE) > $ZSK_S_FILE
+		(cd $KEYDIR; $keygen $_KSK_PARAM $ZONE) > $KSK_FILE
+		(cd $KEYDIR; $keygen $_ZSK_PARAM $ZONE) > $ZSK_FILE
+		(cd $KEYDIR; $keygen $_KSK_PARAM $ZONE) > $KSK_S_FILE
+		(cd $KEYDIR; $keygen $_ZSK_PARAM $ZONE) > $ZSK_S_FILE
 		status
 		;;
 	standby-zsk-keygen)
 		_check_nofile $ZSK_S_FILE
-		(cd $KEYDIR; $keygen $ZSK_PARAM $ZONE) > $ZSK_S_FILE
+		(cd $KEYDIR; $keygen $_ZSK_PARAM $ZONE) > $ZSK_S_FILE
 		status
 		;;
 	standby-ksk-keygen)
 		_check_nofile $KSK_S_FILE
-		(cd $KEYDIR; $keygen $KSK_PARAM $ZONE) > $KSK_S_FILE
+		(cd $KEYDIR; $keygen $_KSK_PARAM $ZONE) > $KSK_S_FILE
 		status
 		;;
 	zskroll)
@@ -219,7 +302,7 @@ do
 		_check_file $KEYDIR/$ZSK.key $KEYDIR/$ZSS.key $KEYDIR/$ZSK.private $KEYDIR/$ZSS.private
 		mv $KEYDIR/$ZSK.key $KEYDIR/$ZSK.private $KEYBACKUPDIR/
 		mv $ZSK_S_FILE $ZSK_FILE
-		(cd $KEYDIR; $keygen $ZSK_PARAM $ZONE) > $ZSK_S_FILE
+		(cd $KEYDIR; $keygen $_ZSK_PARAM $ZONE) > $ZSK_S_FILE
 		OLDZSK="$ZSK"
 		ZSK="$ZSS"
 		ZSS=`head -1 $ZSK_S_FILE`
