@@ -2,7 +2,7 @@
 
 # dnsseczonetool : Simple DNSSEC key management and zone signing tool
 #
-# $Id: dnsseczonetool.20100303,v 1.1 2010/05/10 11:15:30 fujiwara Exp $
+# $Id: dnsseczonetool.20100420,v 1.1 2010/05/10 11:15:30 fujiwara Exp $
 #
 # http://member.wide.ad.jp/~fujiwara/dnssec/dnsseczonetool
 #
@@ -41,8 +41,16 @@
 #                Default: KEYBACKUPDIR="$MASTERDIR/config/backup"
 #     RNDC_OPTION: rndc options or OFF
 #                Default: RNDC_OPTION="-k $MASTERDIR/rndc.key"
+#     ZONE_PREPROCESS: zone preprocess command
+#                Default: cat
+#     RELOADALL_COMMAND:  reload all command
+#                Default: none
+#     DOUBLE_KSK: YES/NO if YES, DNSKEY RRs are signed both KSK and standby KSK.
+#                Default: NO
 #
-#     caution:   $zone is zone name which '.' characters are replaced by '_'.
+#     caution: $zone is zone name
+#              whose '.' and '-' characters are replaced by '_'.
+#		 All zone name must be lowercase.
 #
 # Usage:
 #        
@@ -52,7 +60,9 @@
 #                dnsseczonetool sign zone(s)
 #        3. ZSK rollover
 #                dnsseczonetool zskroll zone(s)
-#        4. Zone key status
+#        4. KSK rollover
+#                dnsseczonetool kskroll zone(s)
+#        5. Zone key status
 #                dnsseczonetool status zone(s)
 
 # Copyright (c) 2009 Kazunori Fujiwara <fujiwara@wide.ad.jp>.
@@ -94,6 +104,8 @@ RNDC_OPTION="-k $MASTERDIR/rndc.key"
 KSK_PARAM="-n zone -a RSASHA1 -b 2048 -f ksk"
 ZSK_PARAM="-n zone -a RSASHA1 -b 1024"
 SIGN_PARAM="-N unixtime"
+ZONE_PREPROCESS="cat"
+DOUBLE_KSK="NO"
 
 if [ -f $CONFIGFILE ]; then
 	. $CONFIGFILE
@@ -123,6 +135,8 @@ HEAD_ZSKNAME="zsk-"
 HEAD_KSKNAME="ksk-"
 HEAD_ZSSNAME="zss-"
 HEAD_KSSNAME="kss-"
+
+NEED_RELOAD="NO"
 
 # setup
 if [ ! -d $CONFIGDIR ]; then
@@ -171,6 +185,7 @@ Usage:  $PROG command zone(s)
      keygen2 : Generate KSK and ZSK and standby sets for the zone(s)
      sign    : (Re-)Sign the zone(s)
      zskroll : Roll ZSK for the zone(s)
+     kskroll : Roll KSK for the zone(s)
      status  : Show key status for the zone(s)
      standby-zsk-keygen :
                Generate standby ZSK key for the zone(s)
@@ -185,29 +200,47 @@ sign()
 	_check_file $ZONEFILE $KSK_FILE $ZSK_FILE
 	KSK=`head -1 $KSK_FILE`
 	ZSK=`head -1 $ZSK_FILE`
-	> $INCFILE
+	KSS=""
+	if [ -f $KSK_S_FILE -a "$DOUBLE_KSK" = "YES" ]; then
+		KSS=`head -1 $KSK_S_FILE`
+	fi
 	_check_file "$KEYDIR/$KSK.private" "$KEYDIR/$ZSK.private"
+	$ZONE_PREPROCESS $ZONE > $ZONE.tmp
 	cat $KSK_FILE $ZSK_FILE | while read keyfile
 	do
 		_check_file "$KEYDIR/$keyfile.key"
-		cat "$KEYDIR/$keyfile.key" >> $INCFILE
+		cat "$KEYDIR/$keyfile.key" >> $ZONE.tmp
 	done
 	for i in $KSK_S_FILE $ZSK_S_FILE
 	do
 		if [ -f $i ]; then
 			keyfile=`head -1 $i`
 			_check_file "$KEYDIR/$keyfile.key"
-			cat "$KEYDIR/$keyfile.key" >> $INCFILE
+			cat "$KEYDIR/$keyfile.key" >> $ZONE.tmp
 		fi
 	done
-	echo $signzone $_SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private -f "$ZONEFILE.signed" $ZONEFILE $KEYDIR/$ZSK.private
-	$signzone $_SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private -f "$ZONEFILE.signed" $ZONEFILE $KEYDIR/$ZSK.private 2>&1
+	cmdname=`basename $signzone`
+	if [ "$cmdname" = "ldns-signzone" ]; then
+		if [ "$KSS" != "" ]; then
+			KSS="$KEYDIR/$KSS"
+		fi
+		echo $signzone $_SIGN_PARAM -o $ZONE -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$ZSK $KEYDIR/$KSK $KSS
+		$signzone $_SIGN_PARAM -o $ZONE -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$ZSK $KEYDIR/$KSK $KSS
+	else
+		if [ "$KSS" != "" ]; then
+			KSS="-k $KEYDIR/$KSS.private"
+		fi
+		echo $signzone $_SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private $KSS -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$ZSK.private 2>&1
+		$signzone $_SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private $KSS -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$ZSK.private 2>&1
+	fi
+	rm $ZONE.tmp
 
 	echo "signzone returns $?"
 
 	if [ "$RNDC_OPTION" != "OFF" ]; then
 		$rndc $RNDC_OPTION reload $ZONE
 	fi
+	NEED_RELOAD="YES"
 }
 
 status()
@@ -215,12 +248,12 @@ status()
 	if [ -f $KSK_FILE ]; then
 		echo -n "$ZONE's KSK = "
 		cat $KSK_FILE;
-		$dsfromkey -2 $KEYDIR/`cat $KSK_FILE`
+		$dsfromkey -2 $KEYDIR/`cat $KSK_FILE`.key
 	fi
 	if [ -f $KSK_S_FILE ]; then
 		echo -n "$ZONE's standby KSK = "
 		cat $KSK_S_FILE;
-		$dsfromkey -2 $KEYDIR/`cat $KSK_S_FILE`
+		$dsfromkey -2 $KEYDIR/`cat $KSK_S_FILE`.key
 	fi
 	if [ -f $ZSK_FILE ]; then
 		echo -n "$ZONE's ZSK = "
@@ -230,6 +263,18 @@ status()
 		echo -n "$ZONE's standby ZSK = "
 		cat $ZSK_S_FILE;
 	fi
+}
+
+keygensub()
+{
+	(
+	cd $KEYDIR;
+	$keygen $1 $2 > $3;
+	_FILE=`cat $3`
+	if [ -f $_FILE.ds ]; then
+		rm $_FILE.ds
+	fi
+	)
 }
 
 if [ "$CMD" = "" ]; then
@@ -254,9 +299,8 @@ do
 	else
 		ZONEFILE=$ZONE
 	fi
-	INCFILE="$MASTERDIR/$ZONEFILE.keys"
 
-	ZONE_=`echo $ZONE | tr . _`
+	ZONE_=`echo $ZONE | tr .- __`
 	eval _SIGN_PARAM=\${SIGN_PARAM_$ZONE_:-$SIGN_PARAM}
 	eval _KSK_PARAM=\${KSK_PARAM_$ZONE_:-$KSK_PARAM}
 	eval _ZSK_PARAM=\${ZSK_PARAM_$ZONE_:-$ZSK_PARAM}
@@ -273,26 +317,26 @@ do
 	case $CMD in
 	keygen)
 		_check_nofile $KSK_FILE $ZSK_FILE
-		(cd $KEYDIR; $keygen $_KSK_PARAM $ZONE) > $KSK_FILE
-		(cd $KEYDIR; $keygen $_ZSK_PARAM $ZONE) > $ZSK_FILE
+		keygensub "$_KSK_PARAM" $ZONE $KSK_FILE
+		keygensub "$_ZSK_PARAM" $ZONE $ZSK_FILE
 		status
 		;;
 	keygen2)
 		_check_nofile $KSK_FILE $ZSK_FILE $KSK_S_FILE $ZSK_S_FILE
-		(cd $KEYDIR; $keygen $_KSK_PARAM $ZONE) > $KSK_FILE
-		(cd $KEYDIR; $keygen $_ZSK_PARAM $ZONE) > $ZSK_FILE
-		(cd $KEYDIR; $keygen $_KSK_PARAM $ZONE) > $KSK_S_FILE
-		(cd $KEYDIR; $keygen $_ZSK_PARAM $ZONE) > $ZSK_S_FILE
+		keygensub "$_KSK_PARAM" $ZONE $KSK_FILE
+		keygensub "$_ZSK_PARAM" $ZONE $ZSK_FILE
+		keygensub "$_KSK_PARAM" $ZONE $KSK_S_FILE
+		keygensub "$_ZSK_PARAM" $ZONE $ZSK_S_FILE
 		status
 		;;
 	standby-zsk-keygen)
 		_check_nofile $ZSK_S_FILE
-		(cd $KEYDIR; $keygen $_ZSK_PARAM $ZONE) > $ZSK_S_FILE
+		keygensub "$_ZSK_PARAM" $ZONE $ZSK_S_FILE
 		status
 		;;
 	standby-ksk-keygen)
 		_check_nofile $KSK_S_FILE
-		(cd $KEYDIR; $keygen $_KSK_PARAM $ZONE) > $KSK_S_FILE
+		keygensub "$_KSK_PARAM" $ZONE $KSK_S_FILE
 		status
 		;;
 	zskroll)
@@ -302,13 +346,29 @@ do
 		_check_file $KEYDIR/$ZSK.key $KEYDIR/$ZSS.key $KEYDIR/$ZSK.private $KEYDIR/$ZSS.private
 		mv $KEYDIR/$ZSK.key $KEYDIR/$ZSK.private $KEYBACKUPDIR/
 		mv $ZSK_S_FILE $ZSK_FILE
-		(cd $KEYDIR; $keygen $_ZSK_PARAM $ZONE) > $ZSK_S_FILE
+		keygensub "$_ZSK_PARAM" $ZONE $ZSK_S_FILE
 		OLDZSK="$ZSK"
 		ZSK="$ZSS"
 		ZSS=`head -1 $ZSK_S_FILE`
 		echo "$ZONE 's ZSK: valid -> removed: $OLDZSK"
 		echo "$ZONE 's ZSK: standby -> valid: $ZSK"
 		echo "$ZONE 's ZSK:      new standby: $ZSS"
+		sign
+		;;
+	kskroll)
+		_check_file $ZONE $KSK_FILE $KSK_S_FILE
+		KSK=`head -1 $KSK_FILE`
+		KSS=`head -1 $KSK_S_FILE`
+		_check_file $KEYDIR/$KSK.key $KEYDIR/$KSS.key $KEYDIR/$KSK.private $KEYDIR/$KSS.private
+		mv $KEYDIR/$KSK.key $KEYDIR/$KSK.private $KEYBACKUPDIR/
+		mv $KSK_S_FILE $KSK_FILE
+		keygensub "$_KSK_PARAM" $ZONE $KSK_S_FILE
+		OLDKSK="$KSK"
+		KSK="$KSS"
+		KSS=`head -1 $KSK_S_FILE`
+		echo "$ZONE 's KSK: valid -> removed: $OLDKSK"
+		echo "$ZONE 's KSK: standby -> valid: $KSK"
+		echo "$ZONE 's KSK:      new standby: $KSS"
 		sign
 		;;
 	sign)
@@ -324,4 +384,9 @@ do
 	esac
 	rm $LOCKF
 done
+
+if [ "$NEED_RELOAD" = "YES" -a "$RELOADALL_COMMAND" != "" ]; then
+	eval $RELOADALL_COMMAND
+fi
+
 exit 0
