@@ -2,7 +2,7 @@
 
 # dnsseczonetool : Simple DNSSEC key management and zone signing tool
 #
-# $Id: dnsseczonetool,v 1.22 2011/09/06 06:02:59 fujiwara Exp $
+# $Id: dnsseczonetool,v 1.26 2013/01/18 08:54:10 fujiwara Exp $
 #
 # http://member.wide.ad.jp/~fujiwara/dnssec/dnsseczonetool
 #
@@ -11,6 +11,7 @@
 #   2. Create dnsseczonetool.conf into the same directory of dnsseczonetool.
 #
 #   dnsseczonetool.conf:
+#     FATAL_MAIL: Send an email to $FATAL_MAIL when fatal error occurs.
 #     MASTERDIR: Zone file directory
 #                Default: MASTERDIR="/etc/namedb/master"
 #     KSK_PARAM: Default dnssec-keygen's options for KSK
@@ -136,9 +137,11 @@ DS_PARAM="-2"
 ZONE_PREPROCESS="cat"
 PRESERVE_REMOVED_KEY="YES"
 
+FATAL_MAIL=""
+
 NOW=`date +%Y%m%d%H%M%S`
 
-if [ -f $CONFIGFILE ]; then
+if [ -s $CONFIGFILE ]; then
 	. $CONFIGFILE
 fi
 
@@ -186,9 +189,8 @@ cd $MASTERDIR
 _check_file()
 {
 	while [ "$1" != "" ]; do
-		if [ ! -f "$1" ]; then
-			echo "$1 does not exist."
-			_usage
+		if [ ! -s "$1" ]; then
+			Fatal "$1 does not exist."
 		fi
 		shift
 	done
@@ -198,11 +200,24 @@ _check_nofile()
 {
 	while [ "$1" != "" ]; do
 		if [ -f "$1" ]; then
-			echo "$1 exist."
-			_usage
+			Fatal "$1 exist."
 		fi
 		shift
 	done
+}
+
+Fatal()
+{
+	if [ "$LOCKF" != "" ]; then
+		rm $LOCKF
+	fi
+
+	if [ "$FATAL_MAIL" = "" ]; then
+		echo $1
+		exit 1
+	fi
+	echo $1 | Mail -s "$1" $FATAL_MAIL
+	exit 1
 }
 
 _usage()
@@ -241,7 +256,7 @@ sign()
 	KSK=`head -1 $KSK_FILE`
 	ZSK=`head -1 $ZSK_FILE`
 	KSS=""
-	if [ -f $KSK_S_FILE ]; then
+	if [ -s $KSK_S_FILE ]; then
 		KSS=`head -1 $KSK_S_FILE`
 	fi
 	_check_file "$KEYDIR/$KSK.private" "$KEYDIR/$ZSK.private"
@@ -253,7 +268,7 @@ sign()
 	done
 	for i in $KSK_S_FILE $ZSK_S_FILE $ZSK_R_FILE
 	do
-		if [ -f $i ]; then
+		if [ -s $i ]; then
 			keyfile=`head -1 $i`
 			_check_file "$KEYDIR/$keyfile.key"
 			cat "$KEYDIR/$keyfile.key" >> $ZONEFILE.tmp
@@ -363,11 +378,24 @@ keygensub()
 	(
 	cd $KEYDIR;
 	echo "$keygen $1 $2"
-	$keygen $1 $2 > $3;
-	_FILE=`cat $3`
-	if [ -f $_FILE.ds ]; then
-		rm $_FILE.ds
+	newfile="$3"
+	tmpfile="$3.tmp"
+	_KEY=`$keygen $1 $2`
+	if [ -f $_KEY.ds ]; then
+		rm $_KEY.ds
 	fi
+	if [ ! -s $_KEY.key ]; then
+		rm $_KEY.key
+		Fatal "cannot write new key: $1 $2 $3"
+	fi
+	echo $_KEY > $tmpfile
+	read _KEY2 < $tmpfile
+	if [ "$_KEY" != "$_KEY2" ]; then
+		rm $tmpfile
+		rm $_KEY.key
+		Fatal "cannot write $tmpfile"
+	fi
+	mv $tmpfile $newfile
 	)
 }
 
@@ -393,11 +421,11 @@ if [ "$CMD" = "" ]; then
 	_usage
 fi
 
-if [ "$1" = "" -a "$ZONELIST" != "" ]; then
-	set $ZONELIST
+if [ "$1" != "" ]; then
+	ZONELIST="$*"
 fi
 
-for ZONE in $*
+for ZONE in $ZONELIST
 do
 	LOCKF="$CONFIGDIR/$ZONE.lock"
 	TMPF="$CONFIGDIR/$ZONE.$$"
@@ -419,7 +447,11 @@ do
 	eval _ZSK_PARAM=\${ZSK_PARAM_$ZONE_:-$ZSK_PARAM}
 	eval _DS_PARAM=\${DS_PARAM_$ZONE_:-$DS_PARAM}
 
-	touch $TMPF
+	echo "LOCK$$" > $TMPF
+	LOCKSTR=`cat $TMPF`
+	if [ ! -f $TMPF -o "LOCK$$" != "$LOCKSTR" ]; then
+		Fatal "cannot write lock file $TMPF"
+	fi
 	if ln $TMPF $LOCKF; then
 		:
 	else
