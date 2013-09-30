@@ -2,9 +2,7 @@
 
 # dnsseczonetool : Simple DNSSEC key management and zone signing tool
 #
-# $Id: dnsseczonetool,v 1.27 2013/06/24 07:54:19 fujiwara Exp $
-#
-# http://member.wide.ad.jp/~fujiwara/dnssec/dnsseczonetool
+# https://github.com/kfujiwara/dnsseczonetool
 #
 # Installation and Configuration:
 #
@@ -116,7 +114,32 @@
 #
 #   8. Zone key status-dnskey (Show KSK DNSKEY for DLV registration)
 #       dnsseczonetool status-dnskey zone(s)
+#
+#
+# Using LDNS and NSD instead of BIND 9 dnssec-* tools
+#
+#  http://www.nlnetlabs.nl/projects/ldns/
+#  http://www.nlnetlabs.nl/projects/nsd/
+#
+#  ldns-signzone does not support unixtime serial number generaton and some 
+#  pseudo definitions ($TTL? $ORIGIN?).
+#  Change serial number field as _SERIAL_ at SOA RR in your zone file.
+#  $ZONE_PREPROCESS command (=sed) will change _SERIAL_ as unixtime.
+#
+#  Suppose LDNS and NSD are installed in /usr/local. 
+#  To use LDNS and NSD with unixtime serial generation,
+#  add following entries in your dnsseczonetool.conf file.
+#
+#  keygen="/usr/local/bin/ldns-keygen"
+#  signzone="/usr/local/bin/ldns-signzone"
+#  dsfromkey="/usr/local/bin/ldns-key2ds -n"
+#  RNDC_OPTION="OFF"
+#  UNIXTIME=`date +%s`
+#  ZONE_PREPROCESS="sed s/_SERIAL_/$UNIXTIME/"
+#  RELOADALL_COMMAND="/usr/local/sbin/nsdc rebuild && /usr/local/sbin/nsdc reload"
+#    
 
+#
 # Copyright (c) 2009-2013 Kazunori Fujiwara <fujiwara@wide.ad.jp>.
 # All rights reserved.
 #
