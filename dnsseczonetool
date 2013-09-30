@@ -2,13 +2,36 @@
 
 # dnsseczonetool : Simple DNSSEC key management and zone signing tool
 #
-# $Id: dnsseczonetool,v 1.26 2013/01/18 08:54:10 fujiwara Exp $
+# $Id: dnsseczonetool,v 1.27 2013/06/24 07:54:19 fujiwara Exp $
 #
 # http://member.wide.ad.jp/~fujiwara/dnssec/dnsseczonetool
 #
 # Installation and Configuration:
+#
 #   1. Copy dnsseczonetool into some directory.
+#        Example: copy it to /etc/namedb/master.
+#
 #   2. Create dnsseczonetool.conf into the same directory of dnsseczonetool.
+#      if you want to change the default values.
+#        Example: touch /etc/namedb/master/dnsseczonetool.conf
+#
+#   3. Prepare traditional zone files. File name should be equal to zone name.
+#        Example: /etc/namedb/master/example.com
+#
+#   4. Generate first key.
+#        Example: /etc/namedb/master/dnsseczonetool keygen example.com
+#
+#   5. Sign zone
+#        Example: /etc/namedb/master/dnsseczonetool sign example.com
+#
+#   6. Edit named.conf/nsd.conf to load signed zone file
+#        Example: zone "example.com" {
+#                        type master;
+#                        file "/etc/namedb/master/exapmle.com.signed";
+#                 }
+#
+#   7. Periodic zone signing: Add one entry to your crontab
+#        Example: "0 7 * * * /etc/namedb/dnsseczonetool sign exapmle.com"
 #
 #   dnsseczonetool.conf:
 #     FATAL_MAIL: Send an email to $FATAL_MAIL when fatal error occurs.
@@ -94,7 +117,7 @@
 #   8. Zone key status-dnskey (Show KSK DNSKEY for DLV registration)
 #       dnsseczonetool status-dnskey zone(s)
 
-# Copyright (c) 2009 Kazunori Fujiwara <fujiwara@wide.ad.jp>.
+# Copyright (c) 2009-2013 Kazunori Fujiwara <fujiwara@wide.ad.jp>.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
