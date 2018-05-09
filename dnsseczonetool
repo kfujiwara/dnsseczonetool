@@ -310,7 +310,7 @@ sign()
 		KSS=`head -1 $KSK_S_FILE`
 	fi
 	ZSS=""
-	if [ $_DOUBLE_SIGN = "YES" -a -s $ZSK_S_FILE ]; then
+	if [ "$_DOUBLE_SIGN" = "YES" -a -s $ZSK_S_FILE ]; then
 		ZSS=`head -1 $ZSK_S_FILE`
 		_check_file "$KEYDIR/$ZSS.key" "$KEYDIR/$ZSS.private"
 	fi
