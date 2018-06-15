@@ -76,6 +76,8 @@
 #     DOUBLE_SIGN: NO|YES
 #     DOUBLE_SIGN_$zone: NO|YES     ZSK Double signing for algorithm roll
 #                Default: NO
+#     DOUBLE_RRSIG_ONLY: NO|YES
+#     DOUBLE_RRSIG_ONLY_$zone: NO|YES
 #     TWOFACE_$zone: The zone has two face zone file for split DNS
 #                  The value is another zone file name
 #                  When signing, both zone files are signed
@@ -141,6 +143,42 @@
 #  ZONE_PREPROCESS="sed s/_SERIAL_/$UNIXTIME/"
 #  RELOADALL_COMMAND="/usr/local/sbin/nsdc rebuild && /usr/local/sbin/nsdc reload"
 #    
+# Algorithm Rollover example using RFC 6781 section 4.1.4 with ldns
+#  Suppose original algorithm = RSASHA256, domain name is "example.com".
+#  Original dnsseczonetool.conf is:
+#    KSK_PARAM_example_com="-a RSASHA256 -k"
+#    ZSK_PARAM_example_com="-a RSASHA256"
+#    SIGN_PARAM_example_com=""
+#  Step 1: generate new ZSK/KSK and add new RRSIGs
+#    change dnsseczonetool.conf as:
+#      KSK_PARAM_example_com="-a ED25519 -k"
+#      ZSK_PARAM_example_com="-a ED25519"
+#      SIGN_PARAM_example_com="-A -d"
+#      DOUBLE_SIGN_example_com="YES"
+#      DOUBLE_RRSIG_ONLY_example_com="YES"
+#    ./dnsseczonetool add-next-ksk example.com
+#    ./dnsseczonetool add-next-zsk example.com
+#    Wait for TTL
+#  Step 2: publish new DNSKEY and new DS
+#    Register new DS in parent registry.
+#    change dnsseczonetool.conf as:
+#      DOUBLE_RRSIG_ONLY_example_com="NO"
+#    ./dnsseczonetool sign example.com
+#    Wait for parent TTL
+#  Step 3: remove old DNSKEY and old DS
+#    Remove old DS from parent registry.
+#    ./dnsseczonetool ksk-rollover example.com
+#    Wait for parent TTL
+#      # differences from RFC 6781: Remains old ZSK 
+#    Wait for TTL
+#  Step 4: remove old ZSK
+#    ./dnsseczonetool zsk-rollover example.com
+#    ./dnsseczonetool remove-previouskey example.com
+#
+#
+# Copyright (c) 2009-2013 Kazunori Fujiwara <fujiwara@wide.ad.jp>.
+# All rights reserved.
+#    
 
 #
 # Copyright (c) 2009-2013 Kazunori Fujiwara <fujiwara@wide.ad.jp>.
@@ -186,6 +224,9 @@ DS_PARAM="-2"
 ZONE_PREPROCESS="cat"
 PRESERVE_REMOVED_KEY="YES"
 
+DOUBLE_RRSIG_ONLY="NO"
+DOUBLE_SIGN="NO"
+
 FATAL_MAIL=""
 
 NOW=`date +%Y%m%d%H%M%S`
@@ -193,14 +234,6 @@ NOW=`date +%Y%m%d%H%M%S`
 if [ -s $CONFIGFILE ]; then
 	. $CONFIGFILE
 fi
-
-if [ "$1" = "" -a "$DEFAULT_ACTION" != "" ]; then
-	echo "Doing $DEFAULT_ACTION"
-	set $DEFAULT_ACTION
-	echo $1 $2 $3
-fi
-CMD="$1"
-shift
 
 if [ "$CONFIGDIR" = "" ]; then
 	CONFIGDIR="$MASTERDIR/config"
@@ -221,6 +254,42 @@ HEAD_ZSRNAME="zsr-"            # Removed ZSK
 HEAD_KSSNAME="kss-"
 
 NEED_RELOAD="NO"
+
+_usage()
+{
+	if [ "$LOCKF" != "" ]; then
+		rm $LOCKF
+	fi
+	cat <<EOF
+$PROG: Simple DNSSEC key management and zone signing tool
+Usage:  $PROG command zone(s)
+  Available commands:
+     keygen       : Generate KSK, ZSK for the zone.
+     sign         : (Re-)Sign the zone.
+     add-next-ksk : Add next KSK for the zone and sign the zone.
+     add-next-zsk : Add next ZSK for the zone and sign the zone.
+     zsk-rollover : Change the next ZSK as a new ZSK and sign the zone.
+     zskroll      : Change the next ZSK as a new ZSK, add next ZSK, and sign the zone.
+     remove-previouskey: Remove previous ZSK
+     ksk-rollover : Remove the previous KSK and sign the zone.
+     status       : Show key status for the zone.
+     status-dnskey: Show KSK DNSKEY for the zone. (for DLV)
+
+     removekeys   : Remove all keys to redo/fix status for the zone.
+
+   Comatibility:
+     keygen2      : Generate KSK, ZSK and next ZSK for the zone.
+	 standby-ksk-keygen = add-next-ksk
+	 standby-zsk-keygen = add-next-zsk
+EOF
+	exit 1
+}
+
+if [ "$1" = "" ]; then
+	_usage
+fi
+CMD="$1"
+shift
 
 # setup
 if [ ! -d $CONFIGDIR ]; then
@@ -269,42 +338,13 @@ Fatal()
 	exit 1
 }
 
-_usage()
-{
-	if [ "$LOCKF" != "" ]; then
-		rm $LOCKF
-	fi
-	cat <<EOF
-$PROG: Simple DNSSEC key management and zone signing tool
-Usage:  $PROG command zone(s)
-  Available commands:
-     keygen       : Generate KSK, ZSK for the zone.
-     sign         : (Re-)Sign the zone.
-     add-next-ksk : Add next KSK for the zone and sign the zone.
-     add-next-zsk : Add next ZSK for the zone and sign the zone.
-     zsk-rollover : Change the next ZSK as a new ZSK and sign the zone.
-     zskroll      : Change the next ZSK as a new ZSK, add next ZSK, and sign the zone.
-     remove-previouskey: Remove previous ZSK
-     ksk-rollover : Remove the previous KSK and sign the zone.
-     status       : Show key status for the zone.
-     status-dnskey: Show KSK DNSKEY for the zone. (for DLV)
-
-     removekeys   : Remove all keys to redo/fix status for the zone.
-
-   Comatibility:
-     keygen2      : Generate KSK, ZSK and next ZSK for the zone.
-	 standby-ksk-keygen = add-next-ksk
-	 standby-zsk-keygen = add-next-zsk
-EOF
-	exit 1
-}
-
 sign()
 {
 	_check_file $ZONEFILE $KSK_FILE $ZSK_FILE
 	KSK=`head -1 $KSK_FILE`
 	ZSK=`head -1 $ZSK_FILE`
 	eval _DOUBLE_SIGN=\${DOUBLE_SIGN_$ZONE_:-$DOUBLE_SIGN}
+	eval _DOUBLE_RRSIG_ONLY=\${DOUBLE_RRSIG_ONLY_$ZONE_:-$DOUBLE_RRSIG_ONLY}
 	KSS=""
 	if [ -s $KSK_S_FILE ]; then
 		KSS=`head -1 $KSK_S_FILE`
@@ -321,14 +361,21 @@ sign()
 		_check_file "$KEYDIR/$keyfile.key"
 		cat "$KEYDIR/$keyfile.key" >> $ZONEFILE.tmp
 	done
-	for i in $KSK_S_FILE $ZSK_S_FILE $ZSK_R_FILE
-	do
-		if [ -s $i ]; then
-			keyfile=`head -1 $i`
-			_check_file "$KEYDIR/$keyfile.key"
-			cat "$KEYDIR/$keyfile.key" >> $ZONEFILE.tmp
-		fi
-	done
+	if [ -s $KSK_S_FILE -a $_DOUBLE_RRSIG_ONLY != "YES" ]; then
+		keyfile=`head -1 $KSK_S_FILE`
+		_check_file "$KEYDIR/$keyfile.key"
+		cat "$KEYDIR/$keyfile.key" >> $ZONEFILE.tmp
+	fi
+	if [ -s $ZSK_S_FILE -a $_DOUBLE_RRSIG_ONLY != "YES" ]; then
+		keyfile=`head -1 $ZSK_S_FILE`
+		_check_file "$KEYDIR/$keyfile.key"
+		cat "$KEYDIR/$keyfile.key" >> $ZONEFILE.tmp
+	fi
+	if [ -s $ZSK_R_FILE ]; then
+		keyfile=`head -1 $ZSK_R_FILE`
+		_check_file "$KEYDIR/$keyfile.key"
+		cat "$KEYDIR/$keyfile.key" >> $ZONEFILE.tmp
+	fi
 	cmdname=`basename $signzone`
 	if [ "$cmdname" = "ldns-signzone" ]; then
 		if [ "$KSS" != "" ]; then
@@ -350,7 +397,7 @@ sign()
 		$signzone $_SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private $KSS -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$ZSK.private $ZSS 2>&1
 	fi
 	echo "signzone returns $?"
-	rm $ZONEFILE.tmp
+	#rm $ZONEFILE.tmp
 
 	eval _TWOFACE=\${TWOFACE_$ZONE_:-}
 
