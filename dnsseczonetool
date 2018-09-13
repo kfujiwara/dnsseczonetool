@@ -120,6 +120,10 @@
 #   8. Zone key status-dnskey (Show KSK DNSKEY for DLV registration)
 #       dnsseczonetool status-dnskey zone(s)
 #
+#   9. Remove keys
+#       removekeys     : Remove all keys to redo/fix status for the zone.
+#       remove-next-ksk: Remove the next KSK
+#       remove-next-zsk: Remove the next ZSK
 #
 # Using LDNS and NSD instead of BIND 9 dnssec-* tools
 #
@@ -264,23 +268,20 @@ _usage()
 $PROG: Simple DNSSEC key management and zone signing tool
 Usage:  $PROG command zone(s)
   Available commands:
-     keygen       : Generate KSK, ZSK for the zone.
-     sign         : (Re-)Sign the zone.
-     add-next-ksk : Add next KSK for the zone and sign the zone.
-     add-next-zsk : Add next ZSK for the zone and sign the zone.
-     zsk-rollover : Change the next ZSK as a new ZSK and sign the zone.
-     zskroll      : Change the next ZSK as a new ZSK, add next ZSK, and sign the zone.
+     keygen         : Generate KSK, ZSK
+     sign           : signzone.
+     add-next-ksk   : Add next KSK and signzone.
+     add-next-zsk   : Add next ZSK and signzone.
+     zsk-rollover   : Change next ZSK as ZSK and signzone.
+     zskroll        : Change next ZSK as ZSK, add next ZSK, and signzone.
      remove-previouskey: Remove previous ZSK
-     ksk-rollover : Remove the previous KSK and sign the zone.
-     status       : Show key status for the zone.
-     status-dnskey: Show KSK DNSKEY for the zone. (for DLV)
+     ksk-rollover   : Remove the previous KSK and signzone.
+     status         : Show key status for the zone.
+     status-dnskey  : Show KSK DNSKEY for the zone. (for DLV)
 
-     removekeys   : Remove all keys to redo/fix status for the zone.
-
-   Comatibility:
-     keygen2      : Generate KSK, ZSK and next ZSK for the zone.
-	 standby-ksk-keygen = add-next-ksk
-	 standby-zsk-keygen = add-next-zsk
+     removekeys     : Remove all keys to redo/fix status for the zone.
+     remove-next-ksk: Remove the next KSK
+     remove-next-zsk: Remove the next ZSK
 EOF
 	exit 1
 }
@@ -576,17 +577,18 @@ do
 		removekeys_sub $ZSK_S_FILE
 		rm $KSK_FILE $ZSK_FILE $KSK_S_FILE $ZSK_S_FILE
 		;;
+	remove-next-ksk)
+		removekeys_sub $KSK_S_FILE
+		rm $KSK_S_FILE
+		;;
+	remove-next-zsk)
+		removekeys_sub $ZSK_S_FILE
+		rm $ZSK_S_FILE
+		;;
 	keygen)
 		_check_nofile $KSK_FILE $ZSK_FILE
 		keygensub "$_KSK_PARAM" $ZONE $KSK_FILE
 		keygensub "$_ZSK_PARAM" $ZONE $ZSK_FILE
-		status
-		;;
-	keygen2)
-		_check_nofile $KSK_FILE $ZSK_FILE $ZSK_S_FILE
-		keygensub "$_KSK_PARAM" $ZONE $KSK_FILE
-		keygensub "$_ZSK_PARAM" $ZONE $ZSK_FILE
-		keygensub "$_ZSK_PARAM" $ZONE $ZSK_S_FILE
 		status
 		;;
 	standby-zsk-keygen)
@@ -594,13 +596,13 @@ do
 		keygensub "$_ZSK_PARAM" $ZONE $ZSK_S_FILE
 		status
 		;;
-	add-next-ksk|standby-ksk-keygen)
+	add-next-ksk)
 		_check_nofile $KSK_S_FILE
 		keygensub "$_KSK_PARAM" $ZONE $KSK_S_FILE
 		sign
 		status
 		;;
-	add-next-zsk|standby-zsk-keygen)
+	add-next-zsk)
 		_check_nofile $ZSK_S_FILE
 		keygensub "$_ZSK_PARAM" $ZONE $ZSK_S_FILE
 		sign
