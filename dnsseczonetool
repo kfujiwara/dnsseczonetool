@@ -398,7 +398,7 @@ sign()
 		$signzone $_SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private $KSS -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$ZSK.private $ZSS 2>&1
 	fi
 	echo "signzone returns $?"
-	#rm $ZONEFILE.tmp
+	rm $ZONEFILE.tmp
 
 	eval _TWOFACE=\${TWOFACE_$ZONE_:-}
 
