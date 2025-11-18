@@ -51,6 +51,8 @@
 #                Default: SIGN_PARAM_DEFAULT="-2"
 #     DS_PARAM_$zone: dsfromkey options for zone
 #                Default: SIGN_PARAM
+#     APPEND_ZONE_$zone: additional file is appended to the zone file
+#
 #     keygen:    dnssec-keygen path
 #                Default: keygen="/usr/local/sbin/dnssec-keygen"
 #     signzone:  dnssec-signzone path
@@ -73,6 +75,8 @@
 #                Default: none
 #     PRESERVE_REMOVED_KEY: NO|YES
 #                Default: YES
+#     KSK_ONLY_$zone: NO|YES          Default: NO
+#     KSK_ONLY: NO|YES                Default: NO
 #     DOUBLE_SIGN: NO|YES
 #     DOUBLE_SIGN_$zone: NO|YES     ZSK Double signing for algorithm roll
 #                Default: NO
@@ -82,6 +86,7 @@
 #                  The value is another zone file name
 #                  When signing, both zone files are signed
 #                Default: none
+#                TWOFACE does not work with KSK_ONLY
 #
 #     caution: $zone is zone name
 #              whose '.' and '-' characters are replaced by '_'.
@@ -124,6 +129,8 @@
 #       removekeys     : Remove all keys to redo/fix status for the zone.
 #       remove-next-ksk: Remove the next KSK
 #       remove-next-zsk: Remove the next ZSK
+#       remove-current-zsk: Remove the current ZSK
+#       remove-current-ksk: Remove the current ZSK
 #
 # Using LDNS and NSD instead of BIND 9 dnssec-* tools
 #
@@ -230,6 +237,7 @@ PRESERVE_REMOVED_KEY="YES"
 
 DOUBLE_RRSIG_ONLY="NO"
 DOUBLE_SIGN="NO"
+KSK_ONLY="NO"
 
 FATAL_MAIL=""
 
@@ -282,6 +290,8 @@ Usage:  $PROG command zone(s)
      removekeys     : Remove all keys to redo/fix status for the zone.
      remove-next-ksk: Remove the next KSK
      remove-next-zsk: Remove the next ZSK
+     remove-current-ksk: Remove the current KSK
+     remove-current-zsk: Remove the current ZSK
 EOF
 	exit 1
 }
@@ -341,21 +351,31 @@ Fatal()
 
 sign()
 {
-	_check_file $ZONEFILE $KSK_FILE $ZSK_FILE
+	_check_file $ZONEFILE $KSK_FILE
 	KSK=`head -1 $KSK_FILE`
-	ZSK=`head -1 $ZSK_FILE`
+	ZSK=''
+	eval _KSK_ONLY=\${KSK_ONLY_$ZONE_:-$KSK_ONLY}
 	eval _DOUBLE_SIGN=\${DOUBLE_SIGN_$ZONE_:-$DOUBLE_SIGN}
 	eval _DOUBLE_RRSIG_ONLY=\${DOUBLE_RRSIG_ONLY_$ZONE_:-$DOUBLE_RRSIG_ONLY}
-	KSS=""
+	eval _APPEND_ZONE=\${APPEND_ZONE_$ZONE_:-$APPEND_ZONE}
+	KSS=''
+	ZSS=''
 	if [ -s $KSK_S_FILE ]; then
 		KSS=`head -1 $KSK_S_FILE`
 	fi
-	ZSS=""
-	if [ "$_DOUBLE_SIGN" = "YES" -a -s $ZSK_S_FILE ]; then
-		ZSS=`head -1 $ZSK_S_FILE`
-		_check_file "$KEYDIR/$ZSS.key" "$KEYDIR/$ZSS.private"
+	_check_file "$KEYDIR/$KSK.private"
+	if [ "$_KSK_ONLY" = "YES" ]; then
+		ZSK=''
+		ZSK_FILE=''
+	else
+		_check_file $ZSK_FILE
+		ZSK=`head -1 $ZSK_FILE`
+		if [ "$_DOUBLE_SIGN" = "YES" -a -s $ZSK_S_FILE ]; then
+			ZSS=`head -1 $ZSK_S_FILE`
+			_check_file "$KEYDIR/$ZSS.key" "$KEYDIR/$ZSS.private"
+		fi
+		_check_file "$KEYDIR/$ZSK.private"
 	fi
-	_check_file "$KEYDIR/$KSK.private" "$KEYDIR/$ZSK.private"
 	$ZONE_PREPROCESS $ZONEFILE > $ZONEFILE.tmp
 	cat $KSK_FILE $ZSK_FILE | while read keyfile
 	do
@@ -367,15 +387,22 @@ sign()
 		_check_file "$KEYDIR/$keyfile.key"
 		cat "$KEYDIR/$keyfile.key" >> $ZONEFILE.tmp
 	fi
-	if [ -s $ZSK_S_FILE -a $_DOUBLE_RRSIG_ONLY != "YES" ]; then
-		keyfile=`head -1 $ZSK_S_FILE`
-		_check_file "$KEYDIR/$keyfile.key"
-		cat "$KEYDIR/$keyfile.key" >> $ZONEFILE.tmp
+	if [ "$_KSK_ONLY" != "YES" ]; then
+		if [ -s $ZSK_S_FILE -a $_DOUBLE_RRSIG_ONLY != "YES" ]; then
+			keyfile=`head -1 $ZSK_S_FILE`
+			_check_file "$KEYDIR/$keyfile.key"
+			cat "$KEYDIR/$keyfile.key" >> $ZONEFILE.tmp
+		fi
+		if [ -s $ZSK_R_FILE ]; then
+			keyfile=`head -1 $ZSK_R_FILE`
+			_check_file "$KEYDIR/$keyfile.key"
+			cat "$KEYDIR/$keyfile.key" >> $ZONEFILE.tmp
+		fi
 	fi
-	if [ -s $ZSK_R_FILE ]; then
-		keyfile=`head -1 $ZSK_R_FILE`
-		_check_file "$KEYDIR/$keyfile.key"
-		cat "$KEYDIR/$keyfile.key" >> $ZONEFILE.tmp
+	if [ "$_APPEND_ZONE" != "" -a -f $_APPEND_ZONE ]; then
+		echo "APPEND_ZONE=$_APPEND_ZONE;"
+		_check_file $_APPEND_ZONE
+		cat $_APPEND_ZONE >> $ZONEFILE.tmp
 	fi
 	cmdname=`basename $signzone`
 	if [ "$cmdname" = "ldns-signzone" ]; then
@@ -385,8 +412,13 @@ sign()
 		if [ "$ZSS" != "" ]; then
 			ZSS="$KEYDIR/$ZSS"
 		fi
-		echo $signzone $_SIGN_PARAM -o $ZONE -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$ZSK $KEYDIR/$KSK $KSS $ZSS
-		$signzone $_SIGN_PARAM -o $ZONE -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$ZSK $KEYDIR/$KSK $KSS $ZSS 
+		if [ "$_KSK_ONLY" = "YES" ]; then
+			echo $signzone $_SIGN_PARAM -o $ZONE -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$KSK $KSS
+			$signzone $_SIGN_PARAM -o $ZONE -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$KSK $KSS
+		else
+			echo $signzone $_SIGN_PARAM -o $ZONE -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$ZSK $KEYDIR/$KSK $KSS $ZSS
+			$signzone $_SIGN_PARAM -o $ZONE -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$ZSK $KEYDIR/$KSK $KSS $ZSS 
+		fi
 	else
 		if [ "$KSS" != "" ]; then
 			KSS="-k $KEYDIR/$KSS.private"
@@ -394,11 +426,16 @@ sign()
 		if [ "$ZSS" != "" ]; then
 			ZSS="$KEYDIR/$ZSS.private"
 		fi
-		echo $signzone $_SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private $KSS -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$ZSK.private $ZSS 2>&1
-		$signzone $_SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private $KSS -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$ZSK.private $ZSS 2>&1
+		if [ "$_KSK_ONLY" = "YES" ]; then
+			echo $signzone $_SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private $KSS -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$KSK.private 2>&1
+			$signzone $_SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private $KSS -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$KSK.private 2>&1
+		else
+			echo $signzone $_SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private $KSS -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$ZSK.private $ZSS 2>&1
+			$signzone $_SIGN_PARAM -o $ZONE -k $KEYDIR/$KSK.private $KSS -f "$ZONEFILE.signed" $ZONEFILE.tmp $KEYDIR/$ZSK.private $ZSS 2>&1
+		fi
 	fi
 	echo "signzone returns $?"
-	rm $ZONEFILE.tmp
+	#rm $ZONEFILE.tmp
 
 	eval _TWOFACE=\${TWOFACE_$ZONE_:-}
 
@@ -581,9 +618,17 @@ do
 		removekeys_sub $KSK_S_FILE
 		rm $KSK_S_FILE
 		;;
+	remove-current-ksk)
+		removekeys_sub $KSK_FILE
+		rm $KSK_FILE
+		;;
 	remove-next-zsk)
 		removekeys_sub $ZSK_S_FILE
 		rm $ZSK_S_FILE
+		;;
+	remove-current-zsk)
+		removekeys_sub $ZSK_FILE
+		rm $ZSK_FILE
 		;;
 	keygen)
 		_check_nofile $KSK_FILE $ZSK_FILE
