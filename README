@@ -45,6 +45,8 @@
 #                Default: SIGN_PARAM_DEFAULT="-N unixtime"
 #     SIGN_PARAM_$zone: dnssec-signzone options for zone
 #                Default: SIGN_PARAM
+#     KSK_ONLY:  KSK_ONLY / Combined Signing Key operation
+#     KSK_ONLY_$zone:  KSK_ONLY / Combined Signing Key operation for zone
 #     DS_PARAM:  Default dsfromkey options for zone
 #                Default: SIGN_PARAM_DEFAULT="-2"
 #     DS_PARAM_$zone: dsfromkey options for zone
@@ -55,18 +57,12 @@
 #                Default: signzone="/usr/local/sbin/dnssec-signzone"
 #     dsfromkey: dnssec-dsfromkey path
 #                Default: dsfromkey="/usr/local/sbin/dnssec-dsfromkey"
-#     rndc:      rndc path
-#                Default: rndc="/usr/local/sbin/rndc"
 #     CONFIGDIR: directory where dnsseczonetool uses.
 #                Default: CONFIGDIR="$MASTERDIR/config"
 #     KEYDIR:    directory where dnsseczonetool puts zone keys.
 #                Default: KEYDIR="$MASTERDIR/config/keydir"
 #     KEYBACKUPDIR: directory where dnsseczonetool puts old keys.
 #                Default: KEYBACKUPDIR="$MASTERDIR/config/backup"
-#     RNDC_OPTION: rndc options or OFF
-#                Default: RNDC_OPTION="-k $MASTERDIR/rndc.key"
-#     ZONE_PREPROCESS: zone preprocess command
-#                Default: cat
 #     RELOADALL_COMMAND:  reload all command
 #                Default: none
 #     PRESERVE_REMOVED_KEY: NO|YES
@@ -119,11 +115,6 @@
 #  http://www.nlnetlabs.nl/projects/ldns/
 #  http://www.nlnetlabs.nl/projects/nsd/
 #
-#  ldns-signzone does not support unixtime serial number generaton and some 
-#  pseudo definitions ($TTL? $ORIGIN?).
-#  Change serial number field as _SERIAL_ at SOA RR in your zone file.
-#  $ZONE_PREPROCESS command (=sed) will change _SERIAL_ as unixtime.
-#
 #  Suppose LDNS and NSD are installed in /usr/local. 
 #  To use LDNS and NSD with unixtime serial generation,
 #  add following entries in your dnsseczonetool.conf file.
@@ -132,7 +123,5 @@
 #  signzone="/usr/local/bin/ldns-signzone"
 #  dsfromkey="/usr/local/bin/ldns-key2ds -n"
 #  RNDC_OPTION="OFF"
-#  UNIXTIME=`date +%s`
-#  ZONE_PREPROCESS="sed s/_SERIAL_/$UNIXTIME/"
 #  RELOADALL_COMMAND="/usr/local/sbin/nsdc rebuild && /usr/local/sbin/nsdc reload"
 #    
