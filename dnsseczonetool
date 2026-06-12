@@ -51,7 +51,7 @@
 #                Default: SIGN_PARAM_DEFAULT="-2"
 #     DS_PARAM_$zone: dsfromkey options for zone
 #                Default: SIGN_PARAM
-#     APPEND_ZONE_$zone: additional file is appended to the zone file
+#     APPEND_ZONEFILE_$zone: additional file is appended to the zone file
 #
 #     keygen:    dnssec-keygen path
 #                Default: keygen="/usr/local/sbin/dnssec-keygen"
@@ -357,7 +357,7 @@ sign()
 	eval _KSK_ONLY=\${KSK_ONLY_$ZONE_:-$KSK_ONLY}
 	eval _DOUBLE_SIGN=\${DOUBLE_SIGN_$ZONE_:-$DOUBLE_SIGN}
 	eval _DOUBLE_RRSIG_ONLY=\${DOUBLE_RRSIG_ONLY_$ZONE_:-$DOUBLE_RRSIG_ONLY}
-	eval _APPEND_ZONE=\${APPEND_ZONE_$ZONE_:-$APPEND_ZONE}
+	eval _APPEND_ZONEFILE=\${APPEND_ZONEFILE_$ZONE_:-$APPEND_ZONEFILE}
 	KSS=''
 	ZSS=''
 	if [ -s $KSK_S_FILE ]; then
@@ -399,10 +399,10 @@ sign()
 			cat "$KEYDIR/$keyfile.key" >> $ZONEFILE.tmp
 		fi
 	fi
-	if [ "$_APPEND_ZONE" != "" -a -f $_APPEND_ZONE ]; then
-		echo "APPEND_ZONE=$_APPEND_ZONE;"
-		_check_file $_APPEND_ZONE
-		cat $_APPEND_ZONE >> $ZONEFILE.tmp
+	if [ "$_APPEND_ZONEFILE" != "" -a -f $_APPEND_ZONEFILE ]; then
+		echo "APPEND_ZONEFILE=$_APPEND_ZONEFILE;"
+		_check_file $_APPEND_ZONEFILE
+		cat $_APPEND_ZONEFILE >> $ZONEFILE.tmp
 	fi
 	cmdname=`basename $signzone`
 	if [ "$cmdname" = "ldns-signzone" ]; then
