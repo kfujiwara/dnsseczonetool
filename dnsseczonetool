@@ -472,6 +472,7 @@ sign()
 
 status()
 {
+	eval _KSK_ONLY=\${KSK_ONLY_$ZONE_:-$KSK_ONLY}
 	if [ -f $KSK_FILE ]; then
 		echo -n "$ZONE's KSK = "
 		cat $KSK_FILE;
@@ -482,6 +483,7 @@ status()
 		cat $KSK_S_FILE;
 		$dsfromkey $_DS_PARAM $KEYDIR/`cat $KSK_S_FILE`.key
 	fi
+	if [ "$_KSK_ONLY" = "NO" ]; then
 	if [ -f $ZSK_FILE ]; then
 		echo -n "$ZONE's ZSK = "
 		cat $ZSK_FILE;
@@ -493,6 +495,7 @@ status()
 	if [ -f $ZSK_R_FILE ]; then
 		echo -n "$ZONE's previous ZSK = "
 		cat $ZSK_R_FILE;
+	fi
 	fi
 }
 
